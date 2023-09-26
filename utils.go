@@ -194,9 +194,11 @@ var (
 		V2_7_0_0,
 		V2_8_0_0,
 	}
-	MinVersion     = V0_8_2_0
-	MaxVersion     = V2_8_0_0
-	DefaultVersion = V1_0_0_0
+	MinVersion           = V0_8_2_0
+	MaxVersion           = V2_8_0_0
+	DefaultVersion       = V1_0_0_0
+	patternKafkaVersion1 = regexp.MustCompile(`^0\.\d+\.\d+\.\d+$`)
+	patternKafkaVersion2 = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 )
 
 // ParseKafkaVersion parses and returns kafka version or error from a string
@@ -207,9 +209,9 @@ func ParseKafkaVersion(s string) (KafkaVersion, error) {
 	var major, minor, veryMinor, patch uint
 	var err error
 	if s[0] == '0' {
-		err = scanKafkaVersion(s, `^0\.\d+\.\d+\.\d+$`, "0.%d.%d.%d", [3]*uint{&minor, &veryMinor, &patch})
+		err = scanKafkaVersion(s, patternKafkaVersion1, "0.%d.%d.%d", [3]*uint{&minor, &veryMinor, &patch})
 	} else {
-		err = scanKafkaVersion(s, `^\d+\.\d+\.\d+$`, "%d.%d.%d", [3]*uint{&major, &minor, &veryMinor})
+		err = scanKafkaVersion(s, patternKafkaVersion2, "%d.%d.%d", [3]*uint{&major, &minor, &veryMinor})
 	}
 	if err != nil {
 		return DefaultVersion, err
@@ -217,8 +219,8 @@ func ParseKafkaVersion(s string) (KafkaVersion, error) {
 	return newKafkaVersion(major, minor, veryMinor, patch), nil
 }
 
-func scanKafkaVersion(s string, pattern string, format string, v [3]*uint) error {
-	if !regexp.MustCompile(pattern).MatchString(s) {
+func scanKafkaVersion(s string, pattern *regexp.Regexp, format string, v [3]*uint) error {
+	if !pattern.MatchString(s) {
 		return fmt.Errorf("invalid version `%s`", s)
 	}
 	_, err := fmt.Sscanf(s, format, v[0], v[1], v[2])

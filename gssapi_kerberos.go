@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jcmturner/gofork/encoding/asn1"
@@ -195,19 +196,26 @@ func (krbAuth *GSSAPIKerberosAuth) initSecContext(bytes []byte, kerberosClient K
 	return nil, nil
 }
 
+var (
+	once           sync.Once
+	kerberosClient KerberosClient
+)
+
 /* This does the handshake for authorization */
 func (krbAuth *GSSAPIKerberosAuth) Authorize(broker *Broker) error {
-	kerberosClient, err := krbAuth.NewKerberosClientFunc(krbAuth.Config)
-	if err != nil {
-		Logger.Printf("Kerberos client error: %s", err)
-		return err
-	}
+	once.Do(func() {
+		var err error
+		kerberosClient, err = krbAuth.NewKerberosClientFunc(krbAuth.Config)
+		if err != nil {
+			panic(fmt.Errorf("kerberos client error: %s", err))
+		}
 
-	err = kerberosClient.Login()
-	if err != nil {
-		Logger.Printf("Kerberos client error: %s", err)
-		return err
-	}
+		err = kerberosClient.Login()
+		if err != nil {
+			panic(fmt.Errorf("kerberos client error: %s", err))
+		}
+	})
+
 	// Construct SPN using serviceName and host
 	// SPN format: <SERVICE>/<FQDN>
 
@@ -223,7 +231,7 @@ func (krbAuth *GSSAPIKerberosAuth) Authorize(broker *Broker) error {
 	krbAuth.encKey = encKey
 	krbAuth.step = GSS_API_INITIAL
 	var receivedBytes []byte = nil
-	defer kerberosClient.Destroy()
+	// defer kerberosClient.Destroy()
 	for {
 		packBytes, err := krbAuth.initSecContext(receivedBytes, kerberosClient)
 		if err != nil {
