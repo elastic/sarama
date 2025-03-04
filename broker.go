@@ -1307,14 +1307,6 @@ func (b *Broker) authenticateViaSASLv1() error {
 	}
 }
 
-func (b *Broker) sendAndReceiveKerberos() error {
-	b.kerberosAuthenticator.Config = &b.conf.Net.SASL.GSSAPI
-	if b.kerberosAuthenticator.NewKerberosClientFunc == nil {
-		b.kerberosAuthenticator.NewKerberosClientFunc = NewKerberosClient
-	}
-	return b.kerberosAuthenticator.Authorize(b)
-}
-
 func (b *Broker) sendAndReceiveSASLHandshake(saslType SASLMechanism, version int16) error {
 	rb := &SaslHandshakeRequest{Mechanism: string(saslType), Version: version}
 

@@ -1,3 +1,5 @@
+//go:build !requirefips
+
 package sarama
 
 import (
