@@ -39,8 +39,17 @@ Updates should always target an explicit release tag. To perform the update, fir
     git checkout -b version-upgrade
 
     # Restore the IBM imports
-    find . -path ./examples -prune -o -name "*.go" -print0 \
+    find . -name "*.go" -print0 \
     | xargs -0 sed -i 's/"github\.com\/elastic\/sarama/"github\.com\/IBM\/sarama/g'
+
+    # If you want to update the go.mod in the examples:
+    find . -path ./go.mod -prune -o -name "go.mod" -print0 \
+    | xargs -0 sed -i 's/github\.com\/elastic\/sarama/github\.com\/IBM\/sarama/g'
+    find ./examples -mindepth 1 -maxdepth 1 -type d -exec \
+      sh -c 'cd "{}" \
+      && echo "Running go mod tidy in {}" \
+      && go get github.com/IBM/sarama@v1.43.3 \
+      && go mod tidy' \;
 
     # Merge the target version into your new branch (replace
     # the version tag as appropriate).
@@ -50,8 +59,17 @@ Updates should always target an explicit release tag. To perform the update, fir
     git merge v1.26.4
 
     # Restore the elastic imports
-    find . -path ./examples -prune -o -name "*.go" -print0 \
+    find . -name "*.go" -print0 \
     | xargs -0 sed -i 's/"github\.com\/IBM\/sarama/"github\.com\/elastic\/sarama/g'
+
+    # If you want to update the go.mod in the examples:
+    find . -path ./go.mod -prune -o -name "go.mod" -print0 \
+    | xargs -0 sed -i 's/github\.com\/IBM\/sarama/github\.com\/elastic\/sarama/g'
+    find ./examples -mindepth 1 -maxdepth 1 -type d -exec \
+      sh -c 'cd "{}" \
+      && echo "Running go mod tidy in {}" \
+      && go get github.com/elastic/sarama@beats-fork \
+      && go mod tidy' \;
 
     # Push the update back to your fork on github.
     git push --set-upstream origin version-upgrade
