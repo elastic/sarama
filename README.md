@@ -11,6 +11,7 @@ The additional patches applied to this version are:
 - Report common unrecoverable connection / authentication errors ([issue](https://github.com/elastic/beats/issues/26294), [pull request](https://github.com/elastic/sarama/pull/15))
   * A fix to the verbose error reporting where a TCP reset signal could prevent a broker connection from being cleaned up properly ([issue](https://github.com/elastic/beats/issues/44606), [pull request](https://github.com/elastic/sarama/pull/28))
 - Disable kerberos if requirefips tags is passed ([issue](https://github.com/elastic/beats/issues/42867), [pull request](https://github.com/elastic/sarama/pull/25))
+- Replaced `jcmturner/gokrb5` library with elastic fork i.e `elastic/gokrb5` [pull request](https://github.com/elastic/sarama/pull/29)
 
 ## Updating this repository
 

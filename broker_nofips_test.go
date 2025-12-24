@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/jcmturner/gokrb5/v8/krberror"
+	"github.com/elastic/gokrb5/v8/krberror"
 	"github.com/rcrowley/go-metrics"
 )
 

@@ -6,11 +6,11 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 
-	"github.com/jcmturner/gokrb5/v8/credentials"
-	"github.com/jcmturner/gokrb5/v8/gssapi"
-	"github.com/jcmturner/gokrb5/v8/iana/keyusage"
-	"github.com/jcmturner/gokrb5/v8/messages"
-	"github.com/jcmturner/gokrb5/v8/types"
+	"github.com/elastic/gokrb5/v8/credentials"
+	"github.com/elastic/gokrb5/v8/gssapi"
+	"github.com/elastic/gokrb5/v8/iana/keyusage"
+	"github.com/elastic/gokrb5/v8/messages"
+	"github.com/elastic/gokrb5/v8/types"
 )
 
 type KafkaGSSAPIHandler struct {

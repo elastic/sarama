@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	krbcfg "github.com/jcmturner/gokrb5/v8/config"
+	krbcfg "github.com/elastic/gokrb5/v8/config"
 )
 
 /*

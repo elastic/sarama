@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/elastic/gokrb5/v8/asn1tools"
+	"github.com/elastic/gokrb5/v8/gssapi"
+	"github.com/elastic/gokrb5/v8/iana/chksumtype"
+	"github.com/elastic/gokrb5/v8/iana/keyusage"
+	"github.com/elastic/gokrb5/v8/messages"
+	"github.com/elastic/gokrb5/v8/types"
 	"github.com/jcmturner/gofork/encoding/asn1"
-	"github.com/jcmturner/gokrb5/v8/asn1tools"
-	"github.com/jcmturner/gokrb5/v8/gssapi"
-	"github.com/jcmturner/gokrb5/v8/iana/chksumtype"
-	"github.com/jcmturner/gokrb5/v8/iana/keyusage"
-	"github.com/jcmturner/gokrb5/v8/messages"
-	"github.com/jcmturner/gokrb5/v8/types"
 )
 
 type GSSAPIKerberosAuth struct {

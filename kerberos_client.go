@@ -3,11 +3,11 @@
 package sarama
 
 import (
-	krb5client "github.com/jcmturner/gokrb5/v8/client"
-	krb5config "github.com/jcmturner/gokrb5/v8/config"
-	"github.com/jcmturner/gokrb5/v8/credentials"
-	"github.com/jcmturner/gokrb5/v8/keytab"
-	"github.com/jcmturner/gokrb5/v8/types"
+	krb5client "github.com/elastic/gokrb5/v8/client"
+	krb5config "github.com/elastic/gokrb5/v8/config"
+	"github.com/elastic/gokrb5/v8/credentials"
+	"github.com/elastic/gokrb5/v8/keytab"
+	"github.com/elastic/gokrb5/v8/types"
 )
 
 type KerberosGoKrb5Client struct {
