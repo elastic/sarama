@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/IBM/sarama"
+	"github.com/elastic/sarama"
 )
 
 // Sarama configuration options
