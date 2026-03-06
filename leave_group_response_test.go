@@ -1,3 +1,5 @@
+//go:build !functional
+
 package sarama
 
 import (
@@ -22,6 +24,20 @@ var (
 		0, 4, 'm', 'i', 'd', '2', // MemberId
 		0, 3, 'g', 'i', 'd', // GroupInstanceId
 		0, 25, // Err
+	}
+	leaveGroupResponseV4NoError = []byte{
+		0, 0, 0, 100, // ThrottleTime
+		0x00, 0x00, // Err
+		3,                     // Two Members
+		5, 'm', 'i', 'd', '1', // MemberId
+		0,    // GroupInstanceId
+		0, 0, // Err
+		0,                     // empty tagged fields
+		5, 'm', 'i', 'd', '2', // MemberId
+		4, 'g', 'i', 'd', // GroupInstanceId
+		0, 25, // Err
+		0, // empty tagged fields
+		0, // empty tagged fields
 	}
 )
 
@@ -67,6 +83,20 @@ func TestLeaveGroupResponse(t *testing.T) {
 			leaveGroupResponseV3NoError,
 			&LeaveGroupResponse{
 				Version:      3,
+				ThrottleTime: 100,
+				Err:          ErrNoError,
+				Members: []MemberResponse{
+					{"mid1", nil, ErrNoError},
+					{"mid2", &groupInstanceId, ErrUnknownMemberId},
+				},
+			},
+		},
+		{
+			"v4",
+			4,
+			leaveGroupResponseV4NoError,
+			&LeaveGroupResponse{
+				Version:      4,
 				ThrottleTime: 100,
 				Err:          ErrNoError,
 				Members: []MemberResponse{

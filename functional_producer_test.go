@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ func TestFuncProducingZstd(t *testing.T) {
 
 func TestFuncProducingNoResponse(t *testing.T) {
 	config := NewFunctionalTestConfig()
+	config.ApiVersionsRequest = false
 	config.Producer.RequiredAcks = NoResponse
 	testProducingMessages(t, config, MinVersion)
 }
@@ -171,8 +173,8 @@ func TestFuncTxnProduce(t *testing.T) {
 	defer consumer.Close()
 
 	pc, err := consumer.ConsumePartition("test.1", 0, OffsetNewest)
-	msgChannel := pc.Messages()
 	require.NoError(t, err)
+	msgChannel := pc.Messages()
 	defer pc.Close()
 
 	nonTransactionalProducer, err := NewAsyncProducer(FunctionalTestEnv.KafkaBrokerAddrs, NewFunctionalTestConfig())
@@ -224,8 +226,8 @@ func TestFuncTxnProduceWithBrokerFailure(t *testing.T) {
 	defer consumer.Close()
 
 	pc, err := consumer.ConsumePartition("test.1", 0, OffsetNewest)
-	msgChannel := pc.Messages()
 	require.NoError(t, err)
+	msgChannel := pc.Messages()
 	defer pc.Close()
 
 	nonTransactionalProducer, err := NewAsyncProducer(FunctionalTestEnv.KafkaBrokerAddrs, NewFunctionalTestConfig())
@@ -290,8 +292,8 @@ func TestFuncTxnProduceEpochBump(t *testing.T) {
 	defer consumer.Close()
 
 	pc, err := consumer.ConsumePartition("test.1", 0, OffsetNewest)
-	msgChannel := pc.Messages()
 	require.NoError(t, err)
+	msgChannel := pc.Messages()
 	defer pc.Close()
 
 	nonTransactionalProducer, err := NewAsyncProducer(FunctionalTestEnv.KafkaBrokerAddrs, NewFunctionalTestConfig())
@@ -443,8 +445,8 @@ func TestFuncTxnProduceAndCommitOffset(t *testing.T) {
 	defer consumer.Close()
 
 	pc, err := consumer.ConsumePartition("test.1", 0, OffsetNewest)
-	msgChannel := pc.Messages()
 	require.NoError(t, err)
+	msgChannel := pc.Messages()
 	defer pc.Close()
 
 	// Ensure consumer is started
@@ -508,8 +510,8 @@ func TestFuncTxnProduceMultiTxn(t *testing.T) {
 	defer consumer.Close()
 
 	pc, err := consumer.ConsumePartition("test.1", 0, OffsetNewest)
-	msgChannel := pc.Messages()
 	require.NoError(t, err)
+	msgChannel := pc.Messages()
 	defer pc.Close()
 
 	nonTransactionalConfig := NewFunctionalTestConfig()
@@ -585,8 +587,8 @@ func TestFuncTxnAbortedProduce(t *testing.T) {
 	defer consumer.Close()
 
 	pc, err := consumer.ConsumePartition("test.1", 0, OffsetNewest)
-	msgChannel := pc.Messages()
 	require.NoError(t, err)
+	msgChannel := pc.Messages()
 	defer pc.Close()
 
 	nonTransactionalConfig := NewFunctionalTestConfig()
@@ -725,6 +727,110 @@ func TestFuncProducingIdempotentWithBrokerFailure(t *testing.T) {
 	}
 }
 
+func TestFuncIdempotentBufferedSequence(t *testing.T) {
+	checkKafkaVersion(t, "0.11.0.0")
+	setupFunctionalTest(t)
+	defer teardownFunctionalTest(t)
+
+	const (
+		topic           = "test.1"
+		partition int32 = 0
+	)
+
+	cfg := NewFunctionalTestConfig()
+	cfg.Net.MaxOpenRequests = 1
+	cfg.Producer.Idempotent = true
+	cfg.Producer.RequiredAcks = WaitForAll
+	cfg.Producer.Return.Successes = true
+	cfg.Producer.Return.Errors = true
+	cfg.Producer.Retry.Max = 64
+	cfg.Producer.Retry.Backoff = 250 * time.Millisecond
+
+	start := time.Now()
+
+	producer, err := NewAsyncProducer(FunctionalTestEnv.KafkaBrokerAddrs, cfg)
+	require.NoError(t, err)
+	defer producer.Close()
+
+	asyncProd, ok := producer.(*asyncProducer)
+	require.True(t, ok)
+
+	waitForMessages := func(count int) {
+		timeout := time.After(2 * time.Minute)
+		for count > 0 {
+			select {
+			case <-timeout:
+				t.Fatalf("timed out waiting for %d messages", count)
+			case perr := <-producer.Errors():
+				if perr != nil {
+					t.Logf("producer error: %v", perr.Err)
+				}
+				count--
+			case <-producer.Successes():
+				count--
+			}
+		}
+	}
+
+	for i := 0; i < 5; i++ {
+		producer.Input() <- &ProducerMessage{
+			Topic:     topic,
+			Partition: partition,
+			Value:     StringEncoder(fmt.Sprintf("warmup-%d", i)),
+		}
+	}
+	waitForMessages(5)
+
+	leader, err := asyncProd.client.Leader(topic, partition)
+	require.NoError(t, err)
+
+	bp := asyncProd.getBrokerProducer(leader)
+	defer asyncProd.unrefBrokerProducer(leader, bp)
+
+	asyncProd.inFlight.Add(1)
+	pp := &partitionProducer{
+		parent:         asyncProd,
+		topic:          topic,
+		partition:      partition,
+		brokerProducer: bp,
+		leader:         leader,
+		retryState:     make([]partitionRetryState, asyncProd.conf.Producer.Retry.Max+1),
+		highWatermark:  1,
+	}
+	pp.retryState[0].buf = []*ProducerMessage{{
+		Topic:     topic,
+		Partition: partition,
+		Value:     StringEncoder("buffered"),
+	}}
+	pp.flushRetryBuffers()
+
+	waitForMessages(1)
+
+	producer.Input() <- &ProducerMessage{
+		Topic:     topic,
+		Partition: partition,
+		Value:     StringEncoder("post-buffer"),
+	}
+	waitForMessages(1)
+
+	logSince := start.UTC().Format(time.RFC3339)
+	cmd := exec.Command(
+		"docker",
+		"compose",
+		"logs",
+		"--since",
+		logSince,
+		fmt.Sprintf("kafka-%d", leader.ID()),
+	)
+	cmd.Env = os.Environ()
+	out, err := cmd.CombinedOutput()
+	require.NoErrorf(t, err, "failed to read broker logs: %s", out)
+
+	logs := string(out)
+	t.Logf("kafka-%d logs since %s:\n%s", leader.ID(), logSince, logs)
+	require.NotContains(t, logs, "OutOfOrderSequenceException", "leader logs contained out-of-order sequence errors:\n%s", logs)
+}
+
 func TestInterceptors(t *testing.T) {
 	config := NewFunctionalTestConfig()
 	setupFunctionalTest(t)
@@ -812,13 +918,24 @@ func testProducingMessages(t *testing.T, config *Config, minVersion KafkaVersion
 	config.Consumer.Return.Errors = true
 
 	kafkaVersions := map[KafkaVersion]bool{}
-	for _, v := range []KafkaVersion{MinVersion, V0_10_0_0, V0_11_0_0, V1_0_0_0, V2_0_0_0, V2_1_0_0} {
-		if v.IsAtLeast(minVersion) {
-			kafkaVersions[v] = true
+	upper, err := ParseKafkaVersion(os.Getenv("KAFKA_VERSION"))
+	if err != nil {
+		t.Logf("warning: failed to parse kafka version: %v", err)
+	}
+	if upper.IsAtLeast(minVersion) {
+		kafkaVersions[upper] = true
+		// KIP-896 dictates a minimum lower bound of 2.1 protocol for Kafka 4.0 onwards
+		if upper.IsAtLeast(V4_0_0_0) {
+			if !minVersion.IsAtLeast(V2_1_0_0) {
+				minVersion = V2_1_0_0
+			}
 		}
 	}
-	if upper, err := ParseKafkaVersion(os.Getenv("KAFKA_VERSION")); err != nil {
-		kafkaVersions[upper] = true
+
+	for _, v := range []KafkaVersion{MinVersion, V0_10_0_0, V0_11_0_0, V1_0_0_0, V2_0_0_0, V2_1_0_0} {
+		if v.IsAtLeast(minVersion) && upper.IsAtLeast(v) {
+			kafkaVersions[v] = true
+		}
 	}
 
 	for version := range kafkaVersions {
@@ -829,22 +946,23 @@ func testProducingMessages(t *testing.T, config *Config, minVersion KafkaVersion
 			checkKafkaVersion(t, version.String())
 			config.Version = version
 
-			client, err := NewClient(FunctionalTestEnv.KafkaBrokerAddrs, config)
+			producerClient, err := NewClient(FunctionalTestEnv.KafkaBrokerAddrs, config)
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer safeClose(t, client)
+			defer safeClose(t, producerClient)
 
 			// Keep in mind the current offset
-			initialOffset, err := client.GetOffset("test.1", 0, OffsetNewest)
+			initialOffset, err := producerClient.GetOffset("test.1", 0, OffsetNewest)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			producer, err := NewAsyncProducerFromClient(client)
+			producer, err := NewAsyncProducerFromClient(producerClient)
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer safeClose(t, producer)
 
 			expectedResponses := TestBatchSize
 			for i := 1; i <= TestBatchSize; {
@@ -866,38 +984,42 @@ func testProducingMessages(t *testing.T, config *Config, minVersion KafkaVersion
 					expectedResponses--
 				}
 			}
-			safeClose(t, producer)
 
 			// Validate producer metrics before using the consumer minus the offset request
-			validateProducerMetrics(t, client)
+			validateProducerMetrics(t, producerClient)
 
-			master, err := NewConsumerFromClient(client)
+			consumerClient, err := NewClient(FunctionalTestEnv.KafkaBrokerAddrs, config)
 			if err != nil {
 				t.Fatal(err)
 			}
-			consumer, err := master.ConsumePartition("test.1", 0, initialOffset)
+			defer safeClose(t, consumerClient)
+			consumer, err := NewConsumerFromClient(consumerClient)
 			if err != nil {
 				t.Fatal(err)
 			}
+			defer safeClose(t, consumer)
+			partitionConsumer, err := consumer.ConsumePartition("test.1", 0, initialOffset)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer safeClose(t, partitionConsumer)
 
 			for i := 1; i <= TestBatchSize; i++ {
 				select {
 				case <-time.After(10 * time.Second):
 					t.Fatal("Not received any more events in the last 10 seconds.")
 
-				case err := <-consumer.Errors():
+				case err := <-partitionConsumer.Errors():
 					t.Error(err)
 
-				case message := <-consumer.Messages():
+				case message := <-partitionConsumer.Messages():
 					if string(message.Value) != fmt.Sprintf("testing %d", i) {
 						t.Fatalf("Unexpected message with index %d: %s", i, message.Value)
 					}
 				}
 			}
 
-			validateConsumerMetrics(t, client)
-
-			safeClose(t, consumer)
+			validateConsumerMetrics(t, consumerClient)
 		})
 	}
 }

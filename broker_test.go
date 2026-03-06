@@ -1,3 +1,5 @@
+//go:build !functional
+
 package sarama
 
 import (
@@ -111,7 +113,6 @@ func (p produceResponsePromise) Get() (*ProduceResponse, error) {
 
 func TestSimpleBrokerCommunication(t *testing.T) {
 	for _, tt := range brokerTestTable {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			Logger.Printf("Testing broker communication for %s", tt.name)
 			mb := NewMockBroker(t, 0)
@@ -155,7 +156,6 @@ func TestSimpleBrokerCommunication(t *testing.T) {
 
 func TestBrokerFailedRequest(t *testing.T) {
 	for _, tt := range brokerFailedReqTestTable {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Logf("Testing broker communication for %s", tt.name)
 			mb := NewMockBroker(t, 0)
