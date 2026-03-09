@@ -1,3 +1,5 @@
+//go:build !functional
+
 package sarama
 
 import (
@@ -257,6 +259,9 @@ func TestProduceSetV3RequestBuilding(t *testing.T) {
 	batch := req.records["t1"][0].RecordBatch
 	if !batch.FirstTimestamp.Equal(now.Truncate(time.Millisecond)) {
 		t.Errorf("Wrong first timestamp: %v", batch.FirstTimestamp)
+	}
+	if !batch.MaxTimestamp.Equal(now.Add(9 * time.Second).Truncate(time.Millisecond)) {
+		t.Errorf("Wrong max timestamp: %v", batch.MaxTimestamp)
 	}
 	for i := 0; i < 10; i++ {
 		rec := batch.Records[i]

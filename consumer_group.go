@@ -472,6 +472,9 @@ func (c *consumerGroup) joinGroupRequest(coordinator *Broker, topics []string) (
 	if c.config.Version.IsAtLeast(V2_3_0_0) {
 		req.Version = 5
 		req.GroupInstanceId = c.groupInstanceId
+		if c.config.Version.IsAtLeast(V2_4_0_0) {
+			req.Version = 6
+		}
 	}
 
 	meta := &ConsumerGroupMemberMetadata{
@@ -529,6 +532,9 @@ func (c *consumerGroup) syncGroupRequest(
 	if c.config.Version.IsAtLeast(V2_3_0_0) {
 		req.Version = 3
 		req.GroupInstanceId = c.groupInstanceId
+		if c.config.Version.IsAtLeast(V2_4_0_0) {
+			req.Version = 4
+		}
 	}
 
 	for memberID, topics := range plan {
@@ -571,6 +577,10 @@ func (c *consumerGroup) heartbeatRequest(coordinator *Broker, memberID string, g
 	if c.config.Version.IsAtLeast(V2_3_0_0) {
 		req.Version = 3
 		req.GroupInstanceId = c.groupInstanceId
+		// Version 4 is the first flexible version
+		if c.config.Version.IsAtLeast(V2_4_0_0) {
+			req.Version = 4
+		}
 	}
 
 	return coordinator.Heartbeat(req)
@@ -637,7 +647,7 @@ func (c *consumerGroup) leave() error {
 		req.Version = 2
 	}
 	if c.config.Version.IsAtLeast(V2_4_0_0) {
-		req.Version = 3
+		req.Version = 4
 		req.Members = append(req.Members, MemberIdentity{
 			MemberId: c.memberID,
 		})
@@ -861,17 +871,31 @@ func newConsumerGroupSession(ctx context.Context, parent *consumerGroup, claims 
 		return nil, err
 	}
 
-	// start consuming
+	// start consuming each topic partition in its own goroutine
 	for topic, partitions := range claims {
 		for _, partition := range partitions {
-			sess.waitGroup.Add(1)
-
+			sess.waitGroup.Add(1) // increment wait group before spawning goroutine
 			go func(topic string, partition int32) {
 				defer sess.waitGroup.Done()
-
-				// cancel the as session as soon as the first
-				// goroutine exits
+				// cancel the group session as soon as any of the consume calls return
 				defer sess.cancel()
+
+				// if partition not currently readable, wait for it to become readable
+				if sess.parent.client.PartitionNotReadable(topic, partition) {
+					timer := time.NewTimer(5 * time.Second)
+					defer timer.Stop()
+
+					for sess.parent.client.PartitionNotReadable(topic, partition) {
+						select {
+						case <-ctx.Done():
+							return
+						case <-parent.closed:
+							return
+						case <-timer.C:
+							timer.Reset(5 * time.Second)
+						}
+					}
+				}
 
 				// consume a single topic/partition, blocking
 				sess.consume(topic, partition)

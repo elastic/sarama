@@ -4,7 +4,7 @@ This repository holds the version of Sarama shipped with Beats, which sometimes 
 
 ## Current state
 
-The current baseline Sarama version is `v1.43.3`.
+The current baseline Sarama version is `v1.46.3`.
 
 The additional patches applied to this version are:
 - A fix for exponential backoff when a Kafka broker is down ([issue](https://github.com/Shopify/sarama/issues/1719), [pull request](https://github.com/elastic/sarama/pull/10), [upstream pull request](https://github.com/Shopify/sarama/pull/1720))

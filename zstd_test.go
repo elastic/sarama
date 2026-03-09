@@ -1,3 +1,5 @@
+//go:build !functional
+
 package sarama
 
 import (
@@ -16,7 +18,7 @@ func BenchmarkZstdMemoryConsumption(b *testing.B) {
 
 	gomaxprocsBackup := runtime.GOMAXPROCS(cpus)
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		for j := 0; j < 2*cpus; j++ {
 			_, _ = zstdCompress(params, nil, buf)
 		}

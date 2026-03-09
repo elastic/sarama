@@ -1,3 +1,5 @@
+//go:build !functional
+
 package sarama
 
 import (
@@ -7,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,57 +17,9 @@ import (
 
 	"github.com/fortytw2/leaktest"
 	"github.com/rcrowley/go-metrics"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-const TestMessage = "ABC THE MESSAGE"
-
-func closeProducerWithTimeout(t *testing.T, p AsyncProducer, timeout time.Duration) {
-	var wg sync.WaitGroup
-	p.AsyncClose()
-
-	closer := make(chan struct{})
-	timer := time.AfterFunc(timeout, func() {
-		t.Error("timeout")
-		close(closer)
-	})
-	defer timer.Stop()
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-closer:
-				return
-			case _, ok := <-p.Successes():
-				if !ok {
-					return
-				}
-				t.Error("Unexpected message on Successes()")
-			}
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case <-closer:
-				return
-			case msg, ok := <-p.Errors():
-				if !ok {
-					return
-				}
-				t.Error(msg.Err)
-			}
-		}
-	}()
-	wg.Wait()
-}
-
-func closeProducer(t *testing.T, p AsyncProducer) {
-	closeProducerWithTimeout(t, p, 5*time.Minute)
-}
 
 func expectResultsWithTimeout(t *testing.T, p AsyncProducer, successCount, errorCount int, timeout time.Duration) {
 	t.Helper()
@@ -104,6 +59,49 @@ func expectResultsWithTimeout(t *testing.T, p AsyncProducer, successCount, error
 
 func expectResults(t *testing.T, p AsyncProducer, successCount, errorCount int) {
 	expectResultsWithTimeout(t, p, successCount, errorCount, 5*time.Minute)
+}
+
+func TestPartitionProducerFlushRetryBuffersAssignsSequence(t *testing.T) {
+	cfg := NewTestConfig()
+	cfg.Producer.Idempotent = true
+
+	txnmgr := &transactionManager{
+		producerID:      1,
+		producerEpoch:   0,
+		sequenceNumbers: map[string]int32{"topic-0": 1},
+	}
+
+	parent := &asyncProducer{
+		conf:   cfg,
+		txnmgr: txnmgr,
+	}
+
+	bp := &brokerProducer{
+		input: make(chan *ProducerMessage, 1),
+	}
+
+	pp := &partitionProducer{
+		parent:         parent,
+		topic:          "topic",
+		partition:      0,
+		brokerProducer: bp,
+		retryState:     make([]partitionRetryState, 1),
+		highWatermark:  1,
+	}
+
+	msg := &ProducerMessage{Topic: "topic", Partition: 0}
+	pp.retryState[0].buf = []*ProducerMessage{msg}
+
+	pp.flushRetryBuffers()
+
+	select {
+	case flushed := <-bp.input:
+		require.True(t, flushed.hasSequence, "message should have a sequence assigned")
+		require.Equal(t, int32(1), flushed.sequenceNumber, "sequence number should have increased")
+		require.Equal(t, txnmgr.producerEpoch, flushed.producerEpoch, "producer epoch should be the same")
+	default:
+		t.Fatal("expected buffered message to flush")
+	}
 }
 
 type testPartitioner chan *int32
@@ -680,6 +678,68 @@ func TestAsyncProducerMultipleRetriesWithBackoffFunc(t *testing.T) {
 	}
 	if atomic.LoadInt32(&backoffCalled[config.Producer.Retry.Max]) != 0 {
 		t.Errorf("expected no retry attempt #%d", config.Producer.Retry.Max)
+	}
+}
+
+func TestAsyncProducerWithExponentialBackoffDurations(t *testing.T) {
+	var backoffDurations []time.Duration
+	var mu sync.Mutex
+
+	topic := "my_topic"
+	maxBackoff := 2 * time.Second
+	config := NewTestConfig()
+
+	innerBackoffFunc := NewExponentialBackoff(defaultRetryBackoff, maxBackoff)
+	backoffFunc := func(retries, maxRetries int) time.Duration {
+		duration := innerBackoffFunc(retries, maxRetries)
+		mu.Lock()
+		backoffDurations = append(backoffDurations, duration)
+		mu.Unlock()
+		return duration
+	}
+
+	config.Producer.Flush.Messages = 5
+	config.Producer.Return.Successes = true
+	config.Producer.Retry.Max = 3
+	config.Producer.Retry.BackoffFunc = backoffFunc
+
+	broker := NewMockBroker(t, 1)
+
+	metadataResponse := new(MetadataResponse)
+	metadataResponse.AddBroker(broker.Addr(), broker.BrokerID())
+	metadataResponse.AddTopicPartition(topic, 0, broker.BrokerID(), nil, nil, nil, ErrNoError)
+	broker.Returns(metadataResponse)
+
+	producer, err := NewAsyncProducer([]string{broker.Addr()}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	failResponse := new(ProduceResponse)
+	failResponse.AddTopicPartition(topic, 0, ErrNotLeaderForPartition)
+	successResponse := new(ProduceResponse)
+	successResponse.AddTopicPartition(topic, 0, ErrNoError)
+
+	broker.Returns(failResponse)
+	broker.Returns(metadataResponse)
+	broker.Returns(failResponse)
+	broker.Returns(metadataResponse)
+	broker.Returns(successResponse)
+
+	for i := 0; i < 5; i++ {
+		producer.Input() <- &ProducerMessage{Topic: topic, Value: StringEncoder("test")}
+	}
+
+	expectResults(t, producer, 5, 0)
+	closeProducer(t, producer)
+	broker.Close()
+
+	assert.Greater(t, backoffDurations[0], time.Duration(0),
+		"Expected first backoff duration to be greater than 0")
+	for i := 1; i < len(backoffDurations); i++ {
+		assert.Greater(t, backoffDurations[i], time.Duration(0))
+		assert.GreaterOrEqual(t, backoffDurations[i], backoffDurations[i-1])
+		assert.LessOrEqual(t, backoffDurations[i], maxBackoff)
 	}
 }
 
@@ -1612,27 +1672,6 @@ func TestBrokerProducerShutdown(t *testing.T) {
 	mockBroker.Close()
 }
 
-type appendInterceptor struct {
-	i int
-}
-
-func (b *appendInterceptor) OnSend(msg *ProducerMessage) {
-	if b.i < 0 {
-		panic("hey, the interceptor has failed")
-	}
-	v, _ := msg.Value.Encode()
-	msg.Value = StringEncoder(string(v) + strconv.Itoa(b.i))
-	b.i++
-}
-
-func (b *appendInterceptor) OnConsume(msg *ConsumerMessage) {
-	if b.i < 0 {
-		panic("hey, the interceptor has failed")
-	}
-	msg.Value = []byte(string(msg.Value) + strconv.Itoa(b.i))
-	b.i++
-}
-
 func testProducerInterceptor(
 	t *testing.T,
 	interceptors []ProducerInterceptor,
@@ -1728,7 +1767,6 @@ func TestAsyncProducerInterceptors(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			testProducerInterceptor(t, tt.interceptors, tt.expectationFn)
 		})
@@ -2242,6 +2280,111 @@ func TestTxnCanAbort(t *testing.T) {
 
 	err = producer.AbortTxn()
 	require.NoError(t, err)
+}
+
+func TestProducerRetryBufferLimits(t *testing.T) {
+	broker := NewMockBroker(t, 1)
+	defer broker.Close()
+	topic := "test-topic"
+
+	metadataRequestHandlerFunc := func(req *request) (res encoderWithHeader) {
+		r := new(MetadataResponse)
+		r.AddBroker(broker.Addr(), broker.BrokerID())
+		r.AddTopicPartition(topic, 0, broker.BrokerID(), nil, nil, nil, ErrNoError)
+		return r
+	}
+
+	produceRequestHandlerFunc := func(req *request) (res encoderWithHeader) {
+		r := new(ProduceResponse)
+		r.AddTopicPartition(topic, 0, ErrNotLeaderForPartition)
+		return r
+	}
+
+	broker.SetHandlerFuncByMap(map[string]requestHandlerFunc{
+		"ProduceRequest":  produceRequestHandlerFunc,
+		"MetadataRequest": metadataRequestHandlerFunc,
+	})
+
+	tests := []struct {
+		name            string
+		configureBuffer func(*Config)
+		messageSize     int
+		numMessages     int
+	}{
+		{
+			name: "MaxBufferLength",
+			configureBuffer: func(config *Config) {
+				config.Producer.Flush.MaxMessages = 1
+				config.Producer.Retry.MaxBufferLength = minFunctionalRetryBufferLength
+			},
+			messageSize: 1, // Small message size
+			numMessages: 10000,
+		},
+		{
+			name: "MaxBufferBytes",
+			configureBuffer: func(config *Config) {
+				config.Producer.Flush.MaxMessages = 1
+				config.Producer.Retry.MaxBufferBytes = minFunctionalRetryBufferBytes
+			},
+			messageSize: 950 * 1024, // 950 KB
+			numMessages: 1000,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := NewTestConfig()
+			config.Producer.Return.Successes = true
+			tt.configureBuffer(config)
+
+			producer, err := NewAsyncProducer([]string{broker.Addr()}, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var (
+				wg                        sync.WaitGroup
+				successes, producerErrors int
+				errorFound                bool
+			)
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for range producer.Successes() {
+					successes++
+				}
+			}()
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for errMsg := range producer.Errors() {
+					if errors.Is(errMsg.Err, ErrProducerRetryBufferOverflow) {
+						errorFound = true
+					}
+					producerErrors++
+				}
+			}()
+
+			longString := strings.Repeat("a", tt.messageSize)
+			val := StringEncoder(longString)
+
+			for i := 0; i < tt.numMessages; i++ {
+				msg := &ProducerMessage{
+					Topic: topic,
+					Value: val,
+				}
+				producer.Input() <- msg
+			}
+
+			producer.AsyncClose()
+			wg.Wait()
+
+			assert.Equal(t, successes+producerErrors, tt.numMessages, "Expected all messages to be processed")
+			assert.True(t, errorFound, "Expected at least one error matching ErrProducerRetryBufferOverflow")
+		})
+	}
 }
 
 // This example shows how to use the producer while simultaneously

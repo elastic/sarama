@@ -1,3 +1,5 @@
+//go:build !functional
+
 package sarama
 
 import (
@@ -1070,6 +1072,9 @@ func TestClusterAdminIncrementalAlterConfigWithErrorCode(t *testing.T) {
 	if err == nil {
 		t.Fatal(errors.New("ErrorCode present but no Error returned"))
 	}
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatal(errors.New("ErrorCode present but not wrapped into returned error"))
+	}
 }
 
 func TestClusterAdminIncrementalAlterBrokerConfig(t *testing.T) {
@@ -1317,6 +1322,45 @@ func TestClusterAdminDeleteAcl(t *testing.T) {
 	_, err = admin.DeleteACL(filter, false)
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	err = admin.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestElectLeaders(t *testing.T) {
+	broker := NewMockBroker(t, 1)
+	defer broker.Close()
+
+	broker.SetHandlerByMap(map[string]MockResponse{
+		"ApiVersionsRequest": NewMockApiVersionsResponse(t),
+		"MetadataRequest": NewMockMetadataResponse(t).
+			SetController(broker.BrokerID()).
+			SetBroker(broker.Addr(), broker.BrokerID()),
+		"ElectLeadersRequest": NewMockElectLeadersResponse(t),
+	})
+
+	config := NewTestConfig()
+	config.Version = V2_4_0_0
+	admin, err := NewClusterAdmin([]string{broker.Addr()}, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := admin.ElectLeaders(PreferredElection, map[string][]int32{"my_topic": {0, 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	partitionResult, ok := response["my_topic"]
+	if !ok {
+		t.Fatalf("topic missing in response")
+	}
+
+	if len(partitionResult) != 1 {
+		t.Fatalf("partition missing in response")
 	}
 
 	err = admin.Close()
