@@ -1385,11 +1385,7 @@ func (b *Broker) authenticateViaSASLv1() error {
 
 	switch b.conf.Net.SASL.Mechanism {
 	case SASLTypeGSSAPI:
-		b.kerberosAuthenticator.Config = &b.conf.Net.SASL.GSSAPI
-		if b.kerberosAuthenticator.NewKerberosClientFunc == nil {
-			b.kerberosAuthenticator.NewKerberosClientFunc = NewKerberosClient
-		}
-		return b.kerberosAuthenticator.AuthorizeV2(b, authSendReceiver)
+		return b.sendAndReceiveKerberosV2(authSendReceiver)
 	case SASLTypeOAuth:
 		provider := b.conf.Net.SASL.TokenProvider
 		return b.sendAndReceiveSASLOAuth(authSendReceiver, provider)
